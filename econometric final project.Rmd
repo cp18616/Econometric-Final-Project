@@ -1,0 +1,136 @@
+---
+title: "econometric final project"
+author: "陳柏融"
+date: "2025-06-08"
+output:
+  pdf_document: default
+  word_document: default
+  html_document: default
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Library
+```{r}
+library(fixest)
+library(dplyr) 
+library(ggplot2)
+library(car)
+library(corrplot)
+```
+
+## 1.資料整理
+```{r}
+#檢查資料名稱、型態是否有誤
+df <- read.csv("Movie_classification.csv")
+head(df)
+str(df)
+```
+
+
+```{r}
+#將所有有問題的名稱改回正常(有些是.改成_、有些是空格改底線、有些是要改成簡單易
+#懂的名稱，一個一個用不同的替代方法改太慢了，我這裡直接暴力全部土炮改法)
+names(df) <- c(
+  "Marketing_expense", "Production_expense", "Multiplex_coverage", "Budget",
+  "Movie_length", "Lead_Actor_rating", "Lead_Actress_rating", "Director_rating",
+  "Producer_rating", "Critic_rating", "Trailer_views", "3D_available",
+  "Time_taken", "Twitter_hashtags", "Genre", "Avg_age_actors",
+  "Num_multiplex", "Collection", "Oscar"
+)
+df <- na.omit(df) #將有空缺的列剃除
+cor(df %>% select(where(is.numeric))) #比較相關係數
+print(df)
+```
+
+
+#依照不同電影類別，計算平均電影預算的差別(最高驚悚片、最低喜劇片)
+```{r}
+df %>%
+  filter(Genre == 'Thriller' | Genre == 'Drama' 
+         |Genre == 'Comedy'| Genre == 'Action') %>%
+  group_by(Genre) %>%
+  summarise(avg_Budget = mean(Budget))
+```
+
+
+#驚悚片、喜劇片預算有沒有顯著差異？
+#p-value = 0.1782無法拒絕H0
+#由此可知，無論是哪種類型的電影，只要預算越高，票房就越好
+```{r}
+df_movie_average <- df %>%
+  filter(Genre == 'Thriller'|Genre == 'Comedy')
+
+t.test(data = df_movie_average, Budget ~ Genre)
+```
+
+#有無奧斯卡對預算是顯著的
+```{r}
+df %>% group_by(Oscar) %>% summarise(mean_collection = mean(Collection))
+t.test(Collection ~ Oscar, data = df)
+```
+
+## 2..迴歸模型
+#先跑一個包含全部參數的回歸式，觀察哪些變數可能有顯著影響
+#Marketing_expense、Budget 、Critic_rating、Trailer_views、Oscar非常顯著(***)
+#以vif>5作為標準的話Multiplex_coverage 、Lead_Actor_rating 、Lead_Actress_rating、
+#Director_rating 、Producer_rating 、Num_multiplex有共線性問題
+```{r}
+model1 <- lm(Collection ~ ., data = df)
+summary(model1)
+vif(model1) #檢查共線性
+plot(model1) #殘差常態性、異質性檢查
+```
+
+```{r}
+df$Trailer_views_10k <- df$Trailer_views / 10000 #改觀看次數單位改成一萬
+model2 <- feols(Collection ~ Critic_rating + Trailer_views_10k , data = df, vcov=("hetero"))
+summary(model2)
+vif(model2)
+```
+
+```{r}
+model3 <- feols(Collection ~ Budget * Marketing_expense, data = df, vcov=("hetero"))
+summary(model3)
+vif(model3)
+```
+
+
+```{r}
+model4 <- feols(log(Collection) ~ log(Marketing_expense)
+               , data = df, vcov=("hetero"))
+summary(model4)
+```
+
+```{r}
+model5 <- feols(Collection ~ Budget + I(Budget^2), data = df, vcov=("hetero"))
+summary(model5)
+```
+
+## 3.資料視覺化
+#依照不同電影類型預算跑出票房的迴歸圖形，可以發現的確是預算越高票就越高
+```{r}
+df %>%
+  filter(Budget < 50000) %>% 
+  ggplot(aes(x = Budget, y = Collection, col = Genre)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth() + 
+  facet_wrap(~Genre)
+```
+
+#相關係數視覺化
+```{r}
+vars <- c("Marketing_expense", "Budget", "Critic_rating", "Trailer_views")
+cor_matrix <- cor(df[, vars], use = "complete.obs")
+corrplot(cor_matrix, method = "number", type = "upper")
+```
+
+#用log減少Marketing_expense的skewness
+```{r}
+ggplot(df, aes(x=Marketing_expense)) + geom_histogram(binwidth = 100)
+```
+
